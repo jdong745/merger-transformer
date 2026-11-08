@@ -1,0 +1,8 @@
+{
+  "parameters": [2.0, 0.2, -0.1, 0.3, -0.05, 0.1, -0.2],
+  "time_min_M": -1100.0,
+  "time_max_M": 80.0,
+  "dt_M": 0.5,
+  "inclination_rad": 1.0471975511965976,
+  "azimuth_rad": 0.0
+}

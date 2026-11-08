@@ -1,0 +1,17 @@
+cff-version: 1.2.0
+message: "Please cite the accompanying waveform-model paper when using this software."
+title: "Merger Transformer: inference for precessing binary black-hole merger waveforms"
+type: software
+authors:
+  - family-names: Dong
+    given-names: Jameson
+version: 0.2.1
+license: MIT
+repository-code: "https://github.com/jdong745/merger-transformer"
+preferred-citation:
+  type: article
+  authors:
+    - family-names: Dong
+      given-names: Jameson
+  title: "A Transformer model for precessing binary black-hole merger waveforms calibrated to numerical relativity"
+  year: 2026
