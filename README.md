@@ -2,11 +2,11 @@
 
 PyTorch inference for precessing binary-black-hole merger waveforms. Given a mass ratio and two spin vectors, the model generates all **21 signed strain modes through ell=4**, analytic time derivatives, and strain-derived Psi4. The eager interface supports automatic differentiation with respect to the seven physical inputs and time.
 
-This release contains inference code and trained weights under the **MIT license**. It does not distribute training code, NR data, synthetic teacher caches, or optimizer states.
+The inference code and released weights are **MIT licensed**. The current repository also provides an optional local fine-tuning pipeline for users with prepared private NR waveforms. NR data, synthetic teacher caches, and the original training optimizer states are not distributed.
 
 ## Download and run
 
-The easiest option is the [complete v0.2.1 bundle](https://github.com/jdong745/merger-transformer/releases/download/v0.2.1/merger-transformer-v7-complete.zip), which includes code, weights, and plotting examples. Extract it and follow `QUICKSTART.md`.
+For inference, the [complete v0.2.1 bundle](https://github.com/jdong745/merger-transformer/releases/download/v0.2.1/merger-transformer-v7-complete.zip) includes code, weights, and plotting examples. Extract it and follow `QUICKSTART.md`. That archived bundle does not contain the new fine-tuning tool; use the current repository for fine-tuning.
 
 Alternatively, clone the repository and download the weights:
 
@@ -49,11 +49,28 @@ This writes mode plots, observer polarizations, Psi4 plots, and the underlying a
 
 Read the [model card](package/MODEL_CARD.md) for training provenance, evaluated domains, and limitations. These finite-window waveforms do not by themselves cover a full detector-band inspiral. High-q precessing evaluation remains sparse.
 
+## Fine-tune with private NR
+
+Install the optional trainer and prepare a local manifest with separate physical-system groups for training and validation:
+
+```bash
+python -m pip install './package[finetune]'
+merger-transformer-finetune --weights weights/weights.pt \
+  --manifest private_data/manifest.json --check-data
+merger-transformer-finetune --weights weights/weights.pt \
+  --manifest private_data/manifest.json --output finetune_runs/my_nr \
+  --device cuda --steps 2000
+```
+
+The default updates only the output heads; `--trainable all` updates the full shared network. Both preserve the four symmetry branches and spline representation. The trainer saves resumable optimizer/EMA state and standalone `best_weights.pt` / `last_weights.pt` files, loadable by the usual inference and plotting interfaces. All data and outputs stay local.
+
+See the [fine-tuning guide](package/docs/FINETUNING.md) for the exact reference-frame, time-origin, memory and mode conventions, masked data format, validation, and resume commands. This is fixed-reference strain adaptation, not automatic preparation of raw NR or reproduction of the paper's full training procedure. The published v0.2.1 weights remain unchanged.
+
 ## Selected model
 
-Version **0.2.1** contains the width-192 v7 Transformer with **1,974,036 parameters**, selected at update **48,000** using float64 EMA weights. Updates 40,000–48,000 used constant learning rate `1e-5`. The release contains this single model.
+The **v0.2.1 weights** contain the width-192 v7 Transformer with **1,974,036 parameters**, selected at update **48,000** using float64 EMA weights. Updates 40,000–48,000 used constant learning rate `1e-5`. Package **0.3.0** adds optional fine-tuning without replacing that model.
 
-The release passed 27 installed-package checks, source-versus-package parity, and CPU/CUDA frozen-compilation correctness controls. Compilation is optional and forward-only; use the eager path for input/time automatic differentiation.
+The original inference release passed 27 installed-package checks, source-versus-package parity, and CPU/CUDA frozen-compilation correctness controls. Additional fine-tuning checks exercise real updates, export, symmetry and exact CPU resume on synthetic targets. Compilation is optional and forward-only; use the eager path for input/time automatic differentiation and fine-tuning.
 
 To run the supplied checks:
 

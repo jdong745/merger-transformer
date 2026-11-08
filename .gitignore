@@ -10,3 +10,10 @@ weights/*.pt
 output/
 *.npz
 waveform*.pt
+private_data/
+finetune_runs/
+best_weights.pt
+last_weights.pt
+state.pt
+*.h5
+*.hdf5

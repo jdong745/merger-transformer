@@ -74,7 +74,11 @@ def main():
     ax[1].plot(plot_t,pp.real,label=r'$\mathrm{Re}\,\Psi_4$'); ax[1].plot(plot_t,-pp.imag,label=r'$-\mathrm{Im}\,\Psi_4$')
     for a in ax: a.legend(loc='upper left'); a.grid(alpha=.2)
     ax[0].set_ylabel(hy); ax[1].set_ylabel(py); ax[1].set_xlabel(xlabel)
-    fig.suptitle('v7 constant low-LR STEP048000 EMA — observer projection, no alignment')
+    if model.metadata.get('model') == 'private_nr_finetune':
+        label = 'Private-NR adaptation, EMA update ' + str(model.metadata['adaptation']['steps'])
+    else:
+        label = 'v7 constant low-LR STEP048000 EMA'
+    fig.suptitle(label + ' — observer projection, no alignment')
     for ext in ('png','pdf'): fig.savefig(str(output)+'_polarizations.'+ext,dpi=160)
     plt.close(fig)
     fig, ax = plt.subplots(7,3,figsize=(13,17),sharex=True,layout='constrained')

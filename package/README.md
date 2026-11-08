@@ -2,7 +2,7 @@
 
 A standalone PyTorch interface to the v7 Transformer for precessing binary-black-hole merger waveforms. The model generates all 21 signed spherical-harmonic modes with degree `ell = 2, 3, 4`, together with differentiable spline coefficients and analytic time derivatives.
 
-This package contains inference code. The accompanying weight file contains the selected constant-low-learning-rate step-48,000 exponential-moving-average (EMA) parameters and fixed spline knots. Training code, optimizer state, NR waveforms, synthetic teacher arrays, and waveform-generator dependencies are not required for inference.
+This package contains inference code and an optional local private-NR fine-tuning tool. The accompanying published weight file contains the selected constant-low-learning-rate step-48,000 exponential-moving-average (EMA) parameters and fixed spline knots. The optional trainer, optimizer state, NR waveforms, synthetic teacher arrays, and waveform-generator dependencies are not required for inference.
 
 ## Installation and weights
 
@@ -145,6 +145,13 @@ Training includes high-mass-ratio synthetic teachers, but precessing SXS evaluat
 
 ## Examples and checks
 
+For local adaptation with your own NR data, install `.[finetune]` and follow
+[docs/FINETUNING.md](docs/FINETUNING.md). That guide defines the prepared data
+contract, head-only or full-network updates, independent validation groups,
+EMA exports, and optimizer-state resume. Adapted exports use the same inference
+API but carry separate provenance; published-model accuracy claims do not apply
+automatically to fine-tuned weights.
+
 From `package/`, after installation:
 
 ```bash
@@ -152,7 +159,7 @@ python examples/generate.py ../weights/weights.pt --output waveform.pt
 python examples/gradients.py ../weights/weights.pt
 ```
 
-The optional checks use synthetic parameter inputs; they require no NR files or training code:
+The optional checks use synthetic parameter inputs and targets; they require no NR files:
 
 ```bash
 python -m pip install '.[test]'

@@ -93,6 +93,15 @@ The native `[-1100,80]M` support includes guard intervals outside the usual repo
 
 ## License and scientific credit
 
+Package 0.3.0 additionally provides optional private-NR fine-tuning, documented
+in [docs/FINETUNING.md](docs/FINETUNING.md). It starts from these published EMA
+weights with a new optimizer and uses fixed-reference strain targets prepared
+by the caller. It is not the historical multi-stage training pipeline. Adapted
+weights carry separate metadata and retain the architecture and symmetry
+projection; the published accuracy numbers above apply only to the unchanged
+v0.2.1 weights. Fine-tuning can degrade other regions or analytic curvature and
+requires independent validation of the intended application.
+
 The code, documentation, and accompanying inference weights are licensed under MIT. Preserve the copyright and permission notice in [LICENSE](LICENSE): Copyright (c) 2026 Jameson Dong and contributors. Installed dependencies retain their own licenses.
 
 Scientific use should cite the manuscript and the relevant upstream sources it identifies: the SXS and RIT numerical-relativity catalogues; NRSur7dq4 and the surrogate modeling methods; SEOBNRv5PHM and its antisymmetric-mode extension; and BHPTNRSur2dq1e3. Cardiff–BAM supplies the auxiliary native-curvature examples. LALSuite/IMRPhenomTPHM supplies a comparison model, not training targets for this checkpoint. This inference bundle does not redistribute those catalogues, teacher evaluators, or their model files.

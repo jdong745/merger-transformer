@@ -10,6 +10,7 @@ from torch import nn
 from ._network import Generator, ModelConfig, MODES
 
 WEIGHT_FORMAT = "merger-transformer-inference-v1"
+ADAPTED_WEIGHT_FORMAT = "merger-transformer-private-finetune-v1"
 
 
 class WaveformModel(nn.Module):
@@ -41,16 +42,25 @@ class WaveformModel(nn.Module):
         if dtype not in (torch.float32, torch.float64):
             raise ValueError("Use torch.float64 (reference precision) or torch.float32")
         payload = torch.load(Path(weights_path), map_location="cpu", weights_only=True)
-        if not isinstance(payload, dict) or payload.get("format") != WEIGHT_FORMAT:
+        if not isinstance(payload, dict) or payload.get("format") not in (WEIGHT_FORMAT, ADAPTED_WEIGHT_FORMAT):
             raise ValueError("Expected an exported merger-transformer inference weights file")
         if set(payload) != {"format", "model_config", "state_dict", "metadata"}:
             raise ValueError("Unexpected weights fields; use the inference-only export")
-        if (payload["metadata"].get("model") != "v7_width192_constant_low_lr"
-                or payload["metadata"].get("selected_step") != 48000
-                or payload["metadata"].get("continuation_arm") != "constant"
-                or payload["metadata"].get("continuation_start_step") != 40000
-                or payload["metadata"].get("continuation_learning_rate") != 1e-5):
+        metadata = payload["metadata"]
+        if not isinstance(metadata, dict):
+            raise ValueError("Expected weights metadata")
+        base = metadata if payload["format"] == WEIGHT_FORMAT else metadata.get("base_product", {})
+        if (not isinstance(base, dict) or base.get("model") != "v7_width192_constant_low_lr"
+                or base.get("selected_step") != 48000
+                or base.get("continuation_arm") != "constant"
+                or base.get("continuation_start_step") != 40000
+                or base.get("continuation_learning_rate") != 1e-5):
             raise ValueError("This release requires v7 width192 constant low-LR STEP048000 EMA weights")
+        if payload["format"] == ADAPTED_WEIGHT_FORMAT and (
+            metadata.get("model") != "private_nr_finetune"
+            or not isinstance(metadata.get("adaptation"), dict)
+        ):
+            raise ValueError("Missing private fine-tuning provenance")
         if payload["metadata"].get("weight_kind") != "EMA":
             raise ValueError("The released model requires EMA weights")
         # Construction must not advance the caller's random stream.
