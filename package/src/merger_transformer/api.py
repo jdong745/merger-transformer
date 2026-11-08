@@ -33,14 +33,23 @@ class WaveformModel(nn.Module):
 
     @classmethod
     def from_pretrained(cls, weights_path: str | Path, *, device: str | torch.device = "cpu",
-                        dtype: torch.dtype = torch.float64, microbatch_size: int = 4) -> "WaveformModel":
+                        dtype: torch.dtype | None = None, microbatch_size: int = 4) -> "WaveformModel":
         """Load an inference-only weights.pt file without importing training code.
 
-        float64 reproduces the paper's EMA inference. float32 is optional and
-        has lower numerical precision. No file downloads occur implicitly.
+        Default: float64 on CPU/CUDA, float32 on MPS. MPS complex-returning
+        methods explicitly return CPU complex64; use *_ri for device-resident
+        real/imaginary channels. No file downloads occur implicitly.
         """
+        device = torch.device(device)
+        if dtype is None:
+            dtype = torch.float32 if device.type == "mps" else torch.float64
         if dtype not in (torch.float32, torch.float64):
             raise ValueError("Use torch.float64 (reference precision) or torch.float32")
+        if device.type == "mps":
+            if dtype != torch.float32:
+                raise ValueError("Metal/MPS requires float32; use CPU for float64 inference")
+            if not torch.backends.mps.is_available():
+                raise RuntimeError("Metal/MPS is unavailable in this PyTorch/macOS environment; no automatic CPU fallback")
         payload = torch.load(Path(weights_path), map_location="cpu", weights_only=True)
         if not isinstance(payload, dict) or payload.get("format") not in (WEIGHT_FORMAT, ADAPTED_WEIGHT_FORMAT):
             raise ValueError("Expected an exported merger-transformer inference weights file")
@@ -73,6 +82,8 @@ class WaveformModel(nn.Module):
             raise ValueError("Spline knots do not match the released model configuration")
         network.load_state_dict(state, strict=True)
         network = network.to(device=device, dtype=dtype)
+        if device.type == "mps":
+            network.mode_head.chunk = 256
         return cls(network, microbatch_size=microbatch_size, metadata=payload["metadata"])
 
     @property
@@ -126,10 +137,58 @@ class WaveformModel(nn.Module):
 
     def coefficients(self, params: Any) -> torch.Tensor:
         """Return complex [21,384] or [batch,21,384] spline coefficients."""
+        if self.device.type == "mps":
+            return self._complex_on_cpu(self.coefficients_ri(params))
         x, single = self._prepare_parameters(params)
         chunks = [self.network.coefficients(piece) for piece in x.split(self.microbatch_size)]
         c = chunks[0] if len(chunks) == 1 else torch.cat(chunks, dim=0)
         return c[0] if single else c
+
+    @staticmethod
+    def _complex_on_cpu(values):
+        # Explicit transfer, differentiable in both channels. Never create a
+        # complex tensor on MPS or enable PyTorch's implicit operator fallback.
+        values = values.to("cpu")
+        return torch.complex(values[..., 0], values[..., 1])
+
+    def coefficients_ri(self, params: Any) -> torch.Tensor:
+        """Device-resident real [...,21,384,2] (real, imaginary) coefficients."""
+        x, single = self._prepare_parameters(params)
+        chunks = [self.network.coefficients_ri(piece) for piece in x.split(self.microbatch_size)]
+        c = chunks[0] if len(chunks) == 1 else torch.cat(chunks, dim=0)
+        return c[0] if single else c
+
+    @staticmethod
+    def _evaluate_ri(c, basis):
+        return torch.stack((c[..., 0] @ basis, c[..., 1] @ basis), dim=-1)
+
+    def evaluate_coefficients_ri(self, coefficients: torch.Tensor, times: Any, *, derivative: int = 0):
+        """Device-resident real [...,21,T,2]; derivative=2 is +H'', not Psi4."""
+        if derivative not in (0, 1, 2):
+            raise ValueError("derivative must be 0, 1 or 2")
+        t = self._prepare_times(times)
+        c = torch.as_tensor(coefficients)
+        if not c.is_floating_point() or c.ndim not in (3, 4) or c.shape[-3:] != (21, 384, 2):
+            raise ValueError("coefficients must be real [21,384,2] or [batch,21,384,2]")
+        if c.ndim == 4 and c.shape[0] == 0:
+            raise ValueError("Empty coefficient batches are not supported")
+        c = c.to(device=self.device, dtype=self.dtype)
+        return self._evaluate_ri(c, self.network.basis(t)[derivative])
+
+    def strain_ri(self, params: Any, times: Any):
+        """Device-resident real [...,21,T,2] strain; differentiable."""
+        return self.evaluate_coefficients_ri(self.coefficients_ri(params), times)
+
+    def psi4_ri(self, params: Any, times: Any):
+        """Device-resident real [...,21,T,2] analytic -H''."""
+        return -self.evaluate_coefficients_ri(self.coefficients_ri(params), times, derivative=2)
+
+    def waveforms_ri(self, params: Any, times: Any):
+        """Real-channel (strain, Psi4), computing the network once, on device."""
+        t = self._prepare_times(times)
+        c = self.coefficients_ri(params)
+        b, _, b2 = self.network.basis(t)
+        return self._evaluate_ri(c, b), -self._evaluate_ri(c, b2)
 
     def evaluate_coefficients(self, coefficients: torch.Tensor, times: Any, *, derivative: int = 0) -> torch.Tensor:
         """Evaluate h or its first/second time derivative from cached coefficients.
@@ -139,6 +198,12 @@ class WaveformModel(nn.Module):
         """
         if derivative not in (0, 1, 2):
             raise ValueError("derivative must be 0, 1 or 2")
+        if self.device.type == "mps":
+            c = torch.as_tensor(coefficients)
+            if not c.is_complex():
+                raise ValueError("coefficients must be complex; use evaluate_coefficients_ri for real channels")
+            pair = torch.stack((c.real, c.imag), dim=-1)
+            return self._complex_on_cpu(self.evaluate_coefficients_ri(pair, times, derivative=derivative))
         t = self._prepare_times(times)
         c = torch.as_tensor(coefficients, device=self.device)
         if c.ndim not in (2, 3) or c.shape[-2:] != (21, 384) or not c.is_complex():
@@ -152,16 +217,22 @@ class WaveformModel(nn.Module):
 
     def forward(self, params: Any, times: Any) -> torch.Tensor:
         """Generate dimensionless strain modes h_lm, preserving input gradients."""
+        if self.device.type == "mps":
+            return self._complex_on_cpu(self.strain_ri(params, times))
         t = self._prepare_times(times)
         return self.evaluate_coefficients(self.coefficients(params), t)
 
     def psi4(self, params: Any, times: Any) -> torch.Tensor:
         """Generate dimensionless Psi4_lm = -d2h_lm/dtau2 analytically."""
+        if self.device.type == "mps":
+            return self._complex_on_cpu(self.psi4_ri(params, times))
         t = self._prepare_times(times)
         return -self.evaluate_coefficients(self.coefficients(params), t, derivative=2)
 
     def waveforms(self, params: Any, times: Any) -> tuple[torch.Tensor, torch.Tensor]:
         """Return (strain, Psi4), evaluating the coefficient network only once."""
+        if self.device.type == "mps":
+            return tuple(self._complex_on_cpu(v) for v in self.waveforms_ri(params, times))
         t = self._prepare_times(times)
         c = self.coefficients(params)
         b, _, b2 = self.network.basis(t)
@@ -180,5 +251,7 @@ class WaveformModel(nn.Module):
         Compilation is lazy and shape-specialized. No eager behavior is changed.
         Use this model, not the returned object, for input/time autodifferentiation.
         """
+        if self.device.type == "mps":
+            raise ValueError("Metal/MPS uses eager real-channel execution; frozen compilation is CPU/CUDA only")
         from ._compiled import CompiledInference
         return CompiledInference(self)

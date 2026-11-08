@@ -68,7 +68,7 @@ See the [fine-tuning guide](package/docs/FINETUNING.md) for the exact reference-
 
 ## Selected model
 
-The **v0.2.1 weights** contain the width-192 v7 Transformer with **1,974,036 parameters**, selected at update **48,000** using float64 EMA weights. Updates 40,000–48,000 used constant learning rate `1e-5`. Package **0.3.1** adds full-network private-NR adaptation with original-model replay without replacing that model.
+The **v0.2.1 weights** contain the width-192 v7 Transformer with **1,974,036 parameters**, selected at update **48,000** using float64 EMA weights. Updates 40,000–48,000 used constant learning rate `1e-5`. Package **0.4.0** includes full-network private-NR adaptation with original-model replay and an experimental Metal/MPS backend without replacing that model.
 
 The original inference release passed 27 installed-package checks, source-versus-package parity, and CPU/CUDA frozen-compilation correctness controls. Additional fine-tuning checks exercise real updates, export, symmetry and exact CPU resume on synthetic targets. Compilation is optional and forward-only; use the eager path for input/time automatic differentiation and fine-tuning.
 
@@ -84,3 +84,9 @@ python -m pytest package/tests --weights weights/weights.pt -q
 Jameson Dong, *A Transformer model for precessing binary black-hole merger waveforms calibrated to numerical relativity*. See [CITATION.cff](CITATION.cff).
 
 Code, documentation, and accompanying inference weights are MIT licensed. Numerical-relativity and teacher-model provenance is described in the paper and model card. Dependencies retain their own licenses.
+
+### Apple Silicon
+
+Experimental Metal/MPS inference and full-network private fine-tuning are available
+through the [Metal guide](package/docs/METAL.md). MPS uses FP32 real channels; the original
+CPU/CUDA reference path remains FP64. Actual Apple hardware verification is pending.

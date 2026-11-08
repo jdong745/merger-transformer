@@ -43,7 +43,7 @@ by_mode = model.mode_dict(x, t, field="strain")
 assert by_mode[(2, 2)].shape == (1041,)
 ```
 
-The default inference precision is float64. Inputs may have shape `[7]` or `[batch, 7]`; the corresponding outputs have shape `[21, time]` or `[batch, 21, time]`. The one-dimensional time grid is shared across the batch. Mode order is ascending `ell`, then ascending `m`: `(2,-2), ..., (2,2), (3,-3), ..., (3,3), (4,-4), ..., (4,4)`.
+The default inference precision is float64 on CPU/CUDA and float32 on the experimental MPS backend. Inputs may have shape `[7]` or `[batch, 7]`; the corresponding outputs have shape `[21, time]` or `[batch, 21, time]`. The one-dimensional time grid is shared across the batch. Mode order is ascending `ell`, then ascending `m`: `(2,-2), ..., (2,2), (3,-3), ..., (3,3), (4,-4), ..., (4,4)`.
 
 On a PyTorch installation with CUDA support, use `device="cuda"` and create inputs and times on that device. `from_pretrained(..., microbatch_size=4)` sets the number of physical inputs processed together; four is the default. All four symmetry evaluations remain part of each physical waveform.
 
@@ -132,7 +132,7 @@ with torch.no_grad():
 
 Physical inputs remain runtime variables. Compilation is lazy and shape-specific. Compile and warm up every batch/grid shape before measuring steady-state execution. CPU compilation includes generated C++ kernel construction and requires a compatible host compiler. CUDA compilation needs a supported GPU toolchain. No prebuilt machine-specific kernels are distributed. Cold costs are separate from waveform-generation latency.
 
-The compiled wrapper is **forward only** and rejects inputs requiring gradients. Use the eager `WaveformModel` for parameter/time gradients, Hessians or differentiable inference. Analytic `psi4` is available in both paths. CPU uses a compiled full-field graph; CUDA compiles coefficient and basis components followed by complex matrix multiplication. Neither caches the grid basis across calls. Compiled `.waveforms()` currently invokes two field evaluations; eager `.waveforms()` computes the coefficient network once. Compiler failures raise an error rather than silently substituting eager inference. Set `microbatch_size` explicitly for throughput tests; the default is four physical inputs. See [docs/RUNTIME.md](docs/RUNTIME.md).
+The compiled wrapper is **forward only** and rejects inputs requiring gradients. Use the eager `WaveformModel` for parameter/time gradients or differentiable inference; Hessian controls apply to CPU/CUDA, not the unverified MPS backend. Analytic `psi4` is available in both paths. CPU uses a compiled full-field graph; CUDA compiles coefficient and basis components followed by complex matrix multiplication. Neither caches the grid basis across calls. Compiled `.waveforms()` currently invokes two field evaluations; eager `.waveforms()` computes the coefficient network once. Compiler failures raise an error rather than silently substituting eager inference. Set `microbatch_size` explicitly for throughput tests; the default is four physical inputs. See [docs/RUNTIME.md](docs/RUNTIME.md).
 
 ## Scientific scope
 
@@ -175,3 +175,9 @@ Jameson Dong, *A Transformer model for precessing binary black-hole merger wavef
 This bundle selects the width-192 recovery checkpoint after constant-learning-rate continuation from update 40,000 to **48,000**, using EMA weights and learning rate `1e-5` throughout those final 8,000 updates. This is the user-selected product; the earlier reheated 48,000 checkpoint and cosine-decay arm are distinct models. No additional time or azimuth correction is applied.
 
 Code, documentation, and the accompanying inference weights are provided under the MIT License. Copyright (c) 2026 Jameson Dong and contributors; see [LICENSE](LICENSE). PyTorch and other installed dependencies retain their own licenses. The model's scientific provenance includes SXS and RIT numerical relativity and NRSur7dq4, SEOBNRv5PHM, and BHPTNRSur2dq1e3 teachers, as described in the manuscript and model card.
+
+### Apple Silicon
+
+Experimental Metal/MPS inference and full-network private fine-tuning are available
+through the [Metal guide](docs/METAL.md). MPS uses FP32 real channels; the original
+CPU/CUDA reference path remains FP64. Actual Apple hardware verification is pending.

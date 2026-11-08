@@ -129,12 +129,23 @@ def load_dataset(path: Path, window="balanced"):
 
 
 def row_loss(model, row):
+    if model.device.type == "mps":
+        return row_loss_ri(model, row)
     target = torch.as_tensor(row.strain, device=model.device,
                              dtype=torch.complex128 if model.dtype == torch.float64 else torch.complex64)
     weight = torch.as_tensor(row.weights, device=model.device, dtype=model.dtype)
     predicted = model(row.params, row.times)
     residual = predicted - target
     return ((residual.real.square() + residual.imag.square()) * weight).sum()
+
+
+def row_loss_ri(model, row):
+    """All-real loss, including backward; no complex tensors on Metal."""
+    target = torch.as_tensor(np.stack((row.strain.real, row.strain.imag), axis=-1),
+                             device=model.device, dtype=model.dtype)
+    weight = torch.as_tensor(row.weights, device=model.device, dtype=model.dtype)
+    residual = model.strain_ri(row.params, row.times) - target
+    return (residual.square().sum(dim=-1) * weight).sum()
 
 
 @torch.no_grad()
@@ -176,6 +187,7 @@ def export_weights(path, model, ema, parent, step, score, settings):
     # Parameter precision is not recovered by exporting to float64.
     state["basis.knots"] = QuinticBasis().knots
     metadata["adaptation"]["training_dtype"] = settings["dtype"]
+    metadata["adaptation"]["numerical_path"] = settings["numerical_path"]
     metadata["adaptation"]["retention"] = {key: settings[key] for key in
         ("replay_per_nr", "replay_weight", "replay_train_size", "replay_val_size", "max_replay_l2")}
     metadata["adaptation"]["retention"]["teacher"] = "unchanged_v0.2.1_product"
@@ -205,10 +217,13 @@ def run(args):
         print(json.dumps(summary, indent=2))
         return summary
     torch.set_num_threads(args.threads)
+    if args.dtype == "auto":
+        args.dtype = "float32" if torch.device(args.device).type == "mps" else "float64"
     model = WaveformModel.from_pretrained(args.weights, device=args.device,
                                           dtype=getattr(torch, args.dtype), microbatch_size=1)
     teacher_path = args.teacher_weights or args.weights
-    teacher = WaveformModel.from_pretrained(teacher_path, device=args.device, dtype=torch.float64,
+    teacher_device = "cpu" if model.device.type == "mps" else args.device
+    teacher = WaveformModel.from_pretrained(teacher_path, device=teacher_device, dtype=torch.float64,
                                             microbatch_size=1)
     if teacher.metadata.get("model") != "v7_width192_constant_low_lr":
         raise ValueError("Replay teacher must be the unchanged published model. For an adapted student, supply --teacher-weights with the original weights.pt")
@@ -217,7 +232,8 @@ def run(args):
     for name, parameter in model.network.named_parameters():
         parameter.requires_grad_(args.trainable == "all" or name.startswith(("output.", "mode_head.")))
     parameters = [p for p in model.parameters() if p.requires_grad]
-    optimizer = torch.optim.AdamW(parameters, lr=args.lr, weight_decay=args.weight_decay)
+    optimizer_options = {"foreach": False, "fused": False} if model.device.type == "mps" else {}
+    optimizer = torch.optim.AdamW(parameters, lr=args.lr, weight_decay=args.weight_decay, **optimizer_options)
     ema = {k: v.detach().clone() for k, v in model.network.state_dict().items()}
     sampler = torch.Generator(device="cpu").manual_seed(args.seed)
     train, validation = [r for r in rows if r.split == "train"], [r for r in rows if r.split == "validation"]
@@ -229,20 +245,27 @@ def run(args):
                  "batch_size", "lr", "weight_decay", "clip", "ema_decay", "seed", "eval_every", "patience",
                  "replay_per_nr", "replay_weight", "replay_train_size", "replay_val_size", "max_replay_l2")}
     settings["replay_version"] = REPLAY_VERSION
+    settings["teacher_device"] = teacher_device
+    settings["numerical_path"] = "real_pairs_mps_v1" if model.device.type == "mps" else "complex_v1"
     out = args.output
     initial_bytes = args.weights.read_bytes()
     parent_digest = hashlib.sha256(initial_bytes).hexdigest()
     teacher_digest = hashlib.sha256(teacher_path.read_bytes()).hexdigest()
     step, best, best_step, bad = 0, float("inf"), 0, 0
     if args.resume:
-        state = torch.load(out / "state.pt", map_location=model.device, weights_only=True)
-        if (state.get("format") != STATE_FORMAT or state["settings"] != settings
+        state = torch.load(out / "state.pt", map_location="cpu" if model.device.type == "mps" else model.device,
+                           weights_only=True)
+        # 0.3.1 CPU/CUDA states predate explicit numerical-path metadata.
+        saved_settings = dict(state["settings"])
+        saved_settings.setdefault("teacher_device", saved_settings["device"])
+        saved_settings.setdefault("numerical_path", "complex_v1")
+        if (state.get("format") != STATE_FORMAT or saved_settings != settings
                 or state["data_fingerprint"] != fingerprint or state["parent_fingerprint"] != parent_digest
                 or state["teacher_fingerprint"] != teacher_digest):
             raise ValueError("Resume requires identical data, parent weights and settings; only --steps may increase")
         model.network.load_state_dict(state["raw"], strict=True)
         optimizer.load_state_dict(state["optimizer"])
-        ema = state["ema"]
+        ema = {k: v.to(device=model.device, dtype=model.dtype) for k, v in state["ema"].items()}
         sampler.set_state(state["sampler"].cpu())
         step, best, best_step, bad = (state[k] for k in ("step", "best", "best_step", "bad"))
         if args.steps <= step:
@@ -327,7 +350,8 @@ def run(args):
             replay_total += float(unweighted.detach())
             total += float(loss.detach())
             loss.backward()
-        torch.nn.utils.clip_grad_norm_(parameters, args.clip, error_if_nonfinite=True)
+        torch.nn.utils.clip_grad_norm_(parameters, args.clip, error_if_nonfinite=True,
+                                      foreach=False if model.device.type == "mps" else None)
         optimizer.step()
         with torch.no_grad():
             for name, value in model.network.state_dict().items():
@@ -356,7 +380,8 @@ def parser():
     p.add_argument("--manifest", type=Path, required=True)
     p.add_argument("--output", type=Path, default=Path("finetune_runs/private_nr"))
     p.add_argument("--device", default="cpu")
-    p.add_argument("--dtype", choices=("float32", "float64"), default="float64")
+    p.add_argument("--dtype", choices=("auto", "float32", "float64"), default="auto",
+                   help="auto: float32 on Metal/MPS, float64 on CPU/CUDA")
     p.add_argument("--trainable", choices=("head", "all"), default="all")
     p.add_argument("--window", choices=("balanced", "merger"), default="balanced")
     p.add_argument("--steps", type=int, default=2000)

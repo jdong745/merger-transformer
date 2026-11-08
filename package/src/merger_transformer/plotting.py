@@ -42,8 +42,8 @@ def main():
     if intervals < 1 or abs(intervals*dt-(hi-lo)) > 1e-9:
         parser.error('Time span must be an integer multiple of dt_M')
     model = WaveformModel.from_pretrained(args.weights, device=args.device)
-    t = torch.linspace(lo, hi, intervals+1, dtype=torch.float64, device=args.device)
-    x = torch.tensor(params, dtype=torch.float64, device=args.device)
+    t = torch.linspace(lo, hi, intervals+1, dtype=model.dtype, device=args.device)
+    x = torch.tensor(params, dtype=model.dtype, device=args.device)
     theta, phi = float(config.get('inclination_rad',math.pi/3)), float(config.get('azimuth_rad',0))
     with torch.no_grad():
         h, p = model.waveforms(x,t)
@@ -100,7 +100,8 @@ def main():
     for ext in ('png','pdf'): fig.savefig(str(output)+'_psi4_modes.'+ext,dpi=160)
     plt.close(fig)
     (Path(str(output)+'_settings.json')).write_text(json.dumps({
-        'configuration':config,'weight_metadata':model.metadata,'dtype':'float64',
+        'configuration':config,'weight_metadata':model.metadata,'dtype':str(model.dtype).removeprefix("torch."),
+        'model_device':str(model.device),'complex_output_device':'cpu' if model.device.type == 'mps' else str(model.device),
         'convention':'H=sum H_lm * spin_minus2_Y_lm = h_plus - i h_cross',
         'alignment':'none','curvature':'P=-d2H/dtau2','physical_scaling':physical,
         'mode_order':[list(v) for v in MODES]},indent=2)+'\n')

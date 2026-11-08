@@ -107,3 +107,9 @@ requires independent validation of the intended application.
 The code, documentation, and accompanying inference weights are licensed under MIT. Preserve the copyright and permission notice in [LICENSE](LICENSE): Copyright (c) 2026 Jameson Dong and contributors. Installed dependencies retain their own licenses.
 
 Scientific use should cite the manuscript and the relevant upstream sources it identifies: the SXS and RIT numerical-relativity catalogues; NRSur7dq4 and the surrogate modeling methods; SEOBNRv5PHM and its antisymmetric-mode extension; and BHPTNRSur2dq1e3. Cardiff–BAM supplies the auxiliary native-curvature examples. LALSuite/IMRPhenomTPHM supplies a comparison model, not training targets for this checkpoint. This inference bundle does not redistribute those catalogues, teacher evaluators, or their model files.
+
+## Experimental Apple backend
+
+MPS uses FP32 real/imaginary arithmetic and CPU FP64 frozen replay targets for
+private fine-tuning. Published FP64 accuracy/speed results are not Metal
+benchmarks. Actual Mac hardware validation is pending; see docs/METAL.md.

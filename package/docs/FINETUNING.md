@@ -124,7 +124,7 @@ python -m merger_transformer.finetune \
 ```
 
 The equivalent installed command is `merger-transformer-finetune`.
-Use `--device cpu --threads 1` for CPU operation. Default arithmetic is
+Use `--device cpu --threads 1` for CPU operation. Default CPU/CUDA arithmetic is
 float64/complex128; `--dtype float32` is an explicit lower-precision option.
 No compilation, mixed precision, distributed training or automatic GPU
 selection is used. The basis is fixed; its canonical float64 knots are restored
@@ -247,7 +247,7 @@ Package 0.3.0 NR-only optimizer states are incompatible with this replay recipe;
 start a new run instead. After a crash, resume
 starts at the last completed validation checkpoint; later unsaved updates are
 repeated. Exact trajectory replay is tested on CPU on the same software stack;
-cross-device/CUDA bitwise reproducibility is not promised.
+cross-device/CUDA/MPS bitwise reproducibility is not promised.
 
 ```python
 from merger_transformer import WaveformModel
@@ -286,3 +286,9 @@ It generates model-derived perturbed targets, performs four full-network updates
 with the default 9:1 sample ratio (small eight-row retention panels), and reloads
 the exported model. CPU is the default; `--device cuda:0` exercises CUDA training.
 It is a software smoke test, not an NR accuracy or generalization benchmark.
+
+## Apple Silicon
+
+Use `--device mps` for the experimental FP32 Metal path. The unchanged frozen
+replay teacher prepares targets on CPU FP64. See [METAL.md](METAL.md) for
+installation, device/output behavior and the required Mac verification smoke.

@@ -13,3 +13,9 @@ The eager `.waveforms()` call shares one coefficient-network evaluation between 
 Use the eager model for automatic differentiation. The compiled forward wrapper rejects gradient-requiring physical inputs or times. Analytic spline derivative evaluation is still provided by `evaluate(..., derivative=1/2)` and `.psi4()`, but that does not imply a compiled input-gradient or Hessian interface.
 
 The release verification report records finite input/output checks against the selected research checkpoint and compilation controls. Paper timings describe specific hardware/software and are not a performance guarantee on another system. FP32 is an explicit optional eager choice; it is not interchangeable with the paper's FP64 precision contract.
+
+## Metal
+
+The experimental MPS backend is eager FP32, with no measured Apple GPU speed
+claim. The FP64 compiled CPU/CUDA benchmarks above do not apply to it. See
+[METAL.md](METAL.md).

@@ -1,5 +1,11 @@
 # Changes
 
+## 0.4.0
+
+- Add experimental Apple Metal/MPS FP32 inference and full-network fine-tuning via real/imaginary channels, with explicit CPU complex output and CPU FP64 replay targets.
+- Add device-resident real-channel APIs, numerical controls and a Mac hardware verification script. Actual Metal hardware remains unverified; CPU/CUDA FP64 inference and published weights are unchanged.
+- Preserve 0.3.1 CPU/CUDA resume compatibility.
+
 ## 0.3.1
 
 - Default to full-network adaptation at learning rate 1e-6, with nine frozen original-model samples per private NR row and equal weights for the two separately averaged losses.

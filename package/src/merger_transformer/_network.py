@@ -14,6 +14,7 @@ import math
 
 import torch
 from torch import nn
+from torch.nn import functional as F
 
 from ._basis import QuinticBasis
 
@@ -81,7 +82,7 @@ class CrossBlock(nn.Module):
         # Request weights to use explicit softmax/matmul rather than fused SDPA;
         # the latter lacks second input derivatives on the installed CPU build.
         # Memory has only eight tokens, so this does not create a large T x T map.
-        query = query + self.attention(self.query_norm(query), memory, memory, need_weights=True)[0]
+        query = query + attend_plain(self.attention, self.query_norm(query), memory)
         return query + self.ff(self.ff_norm(query))
 
 
@@ -101,9 +102,7 @@ class CoefficientSelfAttention(nn.Module):
         normalized = self.norm(query)
         # Explicit softmax/matmul path: need_weights=True avoids the fused SDPA
         # path whose double backward is unavailable in the installed backend.
-        update = self.attention(
-            normalized, normalized, normalized, need_weights=True,
-        )[0]
+        update = attend_plain(self.attention, normalized, normalized)
         return query + update
 
 
@@ -189,8 +188,22 @@ def nu_factor(q: torch.Tensor, nu0: float) -> torch.Tensor:
     return (1 + (nu0 / nu) ** 4) ** -.25
 
 
+def attend_unfused(mha, query, memory):
+    """Functional real attention, bypassing the inference-only native fast path."""
+    q = query.transpose(0, 1)
+    k = q if query is memory else memory.transpose(0, 1)
+    output, _ = F.multi_head_attention_forward(
+        q, k, k, mha.embed_dim, mha.num_heads, mha.in_proj_weight,
+        mha.in_proj_bias, mha.bias_k, mha.bias_v, mha.add_zero_attn,
+        mha.dropout, mha.out_proj.weight, mha.out_proj.bias,
+        training=mha.training, need_weights=True)
+    return output.transpose(0, 1)
+
+
 def attend_plain(mha, query, memory):
     """Explicit softmax/matmul, as the parent's plain path."""
+    if query.device.type == "mps":
+        return attend_unfused(mha, query, memory)
     return mha(query, memory, memory, need_weights=True)[0]
 
 
@@ -288,7 +301,7 @@ class Generator(nn.Module):
     def parameter_count(self):
         return sum(p.numel() for p in self.parameters())
 
-    def raw_coefficients(self, params: torch.Tensor) -> torch.Tensor:
+    def _raw_output(self, params: torch.Tensor) -> torch.Tensor:
         c = self.config
         memory = self.conditioner(coordinates(params)).reshape(len(params), c.memory_tokens, c.transformer_width)
         query = self.query_embedding[None].expand(len(params), -1, -1)
@@ -296,7 +309,31 @@ class Generator(nn.Module):
             query = coefficient_attention(block(query, memory))
         z = self.final_norm(query)
         out = self.output(z).reshape(len(params), c.basis_size, 21, 2) + self.mode_head(z)
+        return out
+
+    def raw_coefficients(self, params: torch.Tensor) -> torch.Tensor:
+        c = self.config
+        out = self._raw_output(params)
         return torch.complex(out[..., 0], out[..., 1]).transpose(1, 2) * c.amplitude_scale
+
+    def coefficients_ri(self, params: torch.Tensor) -> torch.Tensor:
+        """Real [B,21,384,2] coefficients; no complex operations on device."""
+        if params.shape[0] == 0:
+            raise ValueError("Empty batches are not supported")
+        orbit = input_orbit(params, self.config.symmetry)
+        values = self._raw_output(orbit).transpose(1, 2) * self.config.amplitude_scale
+        chunks = values.split(len(params), dim=0)
+        reverse = torch.tensor([MODES.index((ell, -m)) for ell, m in MODES],
+                               device=params.device, dtype=torch.long)
+        sm = params.new_tensor([(-1.)**m for _, m in MODES])[:, None, None]
+        sl = params.new_tensor([(-1.)**ell for ell, _ in MODES])[:, None, None]
+        conjugation = params.new_tensor([1., -1.])
+        aa, bb, cc, dd = chunks
+        bb = bb * sm
+        cc = cc.index_select(-3, reverse) * conjugation * sl
+        dd = (dd * sm).index_select(-3, reverse) * conjugation * sl
+        projected = ((aa + bb) + (cc + dd)) * .25
+        return projected * nu_factor(params[:, 0], self.config.nu0)[:, None, None, None]
 
     def coefficients(self, params: torch.Tensor) -> torch.Tensor:
         if params.shape[0] == 0:
