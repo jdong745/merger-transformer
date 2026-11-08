@@ -16,6 +16,12 @@ python -m pip install './package[finetune]'
 
 ## 1. Prepare local targets
 
+Suggested target configurations for improvement:
+
+- High-q aligned: **SXS:BBH:1110, SXS:BBH:2464**.
+- High-q precessing: **SXS:BBH:2170, SXS:BBH:2243, SXS:BBH:2628,
+  SXS:BBH:2629, SXS:BBH:2633, SXS:BBH:3930, SXS:BBH:3931, SXS:BBH:3932**.
+
 The input is **prepared dimensionless strain modes**, not raw simulation
 directories or Psi4. Your extraction, junk removal, memory treatment, frame
 rotation and reference-spin measurement remain your responsibility. No spins,
