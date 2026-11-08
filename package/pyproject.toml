@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "merger-transformer"
-version = "0.3.0"
+version = "0.3.1"
 description = "Differentiable black-hole merger waveforms and local private-NR fine-tuning"
 readme = "README.md"
 requires-python = ">=3.10"

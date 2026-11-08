@@ -2,5 +2,5 @@
 from .api import WaveformModel
 from ._network import MODES
 
-__version__ = "0.3.0"
+__version__ = "0.3.1"
 __all__ = ["WaveformModel", "MODES", "__version__"]

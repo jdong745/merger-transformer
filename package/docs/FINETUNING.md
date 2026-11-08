@@ -1,9 +1,11 @@
 # Fine-tuning with private NR waveforms
 
 The optional trainer adapts the **released v7 constant-48,000 EMA model** to
-locally supplied strain targets. It does not require the original training
-catalogue, teachers, research repository, or optimizer state. The original
-weights and architecture are unchanged. Adapted weights are separate models;
+locally supplied strain targets, with frozen original-model replay to constrain
+forgetting. Full-network adaptation is the default. It does not require the
+original training catalogue, upstream teacher generators, research repository,
+or optimizer state. The original weights and architecture are unchanged.
+Adapted weights are separate models;
 the paper's accuracy numbers do not apply to them automatically.
 
 Install the current repository version, rather than the historical v0.2.1 ZIP:
@@ -112,7 +114,7 @@ frame, memory subtraction or reference event is physically correct.
 python -m merger_transformer.finetune \
   --weights weights/weights.pt --manifest private_data/manifest.json \
   --output finetune_runs/private_nr --device cuda:0 \
-  --steps 2000 --batch-size 4 --lr 1e-5 --eval-every 100
+  --steps 2000 --batch-size 1 --lr 1e-6 --eval-every 100
 ```
 
 The equivalent installed command is `merger-transformer-finetune`.
@@ -123,9 +125,9 @@ selection is used. The basis is fixed; its canonical float64 knots are restored
 in exports even after float32 training. Exporting parameters as float64 does
 not recover precision lost during float32 training.
 
-Default `--trainable head` updates the shared linear output and mode-coupling
-head, freezing the conditioner and coefficient-attention backbone.
-`--trainable all` updates the full shared network. Both retain the four
+Default `--trainable all` updates the full shared network, including the
+conditioner, attention blocks and output heads. Optional `--trainable head`
+updates only the output and mode-coupling heads. Both retain the four
 exchange/reflection branches, all 21 signed output modes, and the same quintic
 time regularity. Fine-tuning does not itself guarantee accurate curvature.
 
@@ -136,24 +138,79 @@ If your targets have inconsistent physical reference phases or clocks, fix
 their preparation before training rather than expecting the network to absorb
 unrelated coordinate offsets.
 
-The default loss is the mean of two normalized squared strain errors on
+Each private-row loss is the mean of two normalized squared strain errors on
 `[-1000,-160)` and `[-160,40]M`. Each window needs positive observed target
 energy. Use `--window merger` when only `[-160,40]M` has usable support.
-No accuracy outside the supervised window is claimed. There is no Psi4 loss
-or synthetic teacher generation. Samples are drawn uniformly by physical
-group, then uniformly among that group's rows; `--batch-size` is the number
-of accumulated rows per AdamW update, processed one at a time to limit memory.
+No accuracy outside the supervised window is claimed. There is no Psi4 loss.
+Private rows are drawn uniformly by physical group, then uniformly among that
+group's rows; `--batch-size` counts private NR rows per update. Rows are
+processed one at a time, accumulating gradients, to limit activation memory.
+
+### Frozen-model replay
+
+For every private row, draw **nine synthetic rows** from an independent fixed
+retention pool. Targets come from the unchanged released model, never the
+updating student. The objective uses separate averages:
+
+```text
+loss = mean(private normalized squared strain error)
+     + replay_weight * mean(replay normalized squared strain error)
+```
+
+Defaults are `--replay-per-nr 9` and `--replay-weight 1`: 90% of sampled rows
+are synthetic, but the two mean losses have equal weight. This avoids reducing
+the private-data loss to 10% just because retention needs broader coverage.
+The learning rate is `1e-6`. These are conservative starting settings, not an
+NR-validated optimum or a guarantee against catastrophic forgetting.
+
+At startup the frozen float64 model generates 512 training-retention inputs
+and 128 separately seeded validation-retention inputs. They use all 21 modes,
+the full `[-1000,40]M` grid at 1M spacing, and the same balanced early/merger
+strain normalization, even when private NR uses `--window merger`. Each pool
+contains equal numbers (up to rounding) in four strata:
+
+| Stratum | Mass ratio | Spins |
+| --- | --- | --- |
+| q1–4 | log-uniform [1,4] | magnitudes up to .8 |
+| q4–8 | log-uniform [4,8] | magnitudes up to .9 |
+| q8–20 | log-uniform [8,20] | magnitudes up to .9 |
+| aligned q20–1000 | log-uniform [20,1000] | primary aligned spin [-.5,.8], secondary zero |
+
+In the first three strata, each input is aligned with probability 1/4 (uniform
+signed z spins); otherwise spin directions are isotropic and magnitudes
+uniform. The last stratum follows the published perturbative-teacher coverage.
+These are original-model predictions, **not new NR truth**; preserving them
+can preserve original-model bias, especially in extrapolation. This finite
+pool and finite grid do not certify global retention or curvature accuracy.
+
+`--replay-train-size` and `--replay-val-size` control pool sizes (at least four
+each). Default arrays require roughly 0.35 GB plus serialization overhead in
+host memory and disk. Targets are cached locally in `replay.pt`, reused on
+resume, and never refreshed from the student. Generation has a one-time cost;
+each training update then processes ten waveforms at the default batch size.
 
 The optimizer is **new AdamW**, not the unpublished original optimizer.
 The learning rate is constant; weight decay defaults to `1e-4`, gradient-norm
 clipping to 1, and EMA decay to 0.99. EMA starts at the supplied model, not zero.
-Validation evaluates the EMA with the same fixed-reference metric, averages
-row L2 within each group and then averages groups. BEST includes the unchanged
-parent at step zero, so an unsuccessful run can retain the parent as BEST.
+Private validation evaluates the EMA with the same fixed-reference metric,
+averages row L2 within each group and then averages groups. Retention validation
+separately measures departure from the original model, reporting overall mean,
+P95, maximum, and means in all four q strata. **There is no hard retention bound
+by default**: BEST is selected by private-validation group L2. The initial model
+is included, so an unsuccessful run can retain it as BEST. Departure from the
+original model is not automatically a deterioration; the original model has
+errors which private NR can correct. Assess the retention statistics alongside
+independent NR accuracy rather than treating the original prediction as truth.
+
+Users who need a deployment-specific bound can set `--max-replay-l2 VALUE`.
+Then only checkpoints whose mean retention L2 is below that value in **every**
+q stratum are eligible for BEST; LAST is exported even if ineligible. The value
+is relative strain L2, not detector mismatch, and is not an accuracy certificate.
 `--patience 10` stops after ten validation checks without improvement.
-Regularization and early stopping do not guarantee retention outside your data
-domain; include suitable anchor systems in TRAIN and independent checks in
-validation, particularly at high q and high spin.
+Regularization, replay, and early stopping do not guarantee retention outside
+the checked panel; independently assess the intended application, particularly
+at high q and high spin. Improving retention validation is not evidence of
+improved NR accuracy.
 
 ## 3. Resume and load
 
@@ -162,7 +219,9 @@ Local outputs:
 - `best_weights.pt`: minimum validation-group L2 EMA, directly loadable.
 - `last_weights.pt`: last evaluated EMA, directly loadable.
 - `state.pt`: raw parameters, EMA, AdamW and sampler state for resume.
-- `metrics.jsonl`: per-check validation rows, aggregate scores and batch loss.
+- `replay.pt`: frozen original-model synthetic TRAIN/validation targets.
+- `metrics.jsonl`: private-validation rows, retention strata/tails, eligibility,
+  selection scores, and separate private/replay training losses.
 - `result.json`: current/completed run state and selection summary.
 
 The output directory must be new for a fresh run. A resume keeps the optimizer,
@@ -173,11 +232,13 @@ the **total** step budget:
 python -m merger_transformer.finetune \
   --weights weights/weights.pt --manifest private_data/manifest.json \
   --output finetune_runs/private_nr --device cuda:0 \
-  --steps 3000 --batch-size 4 --lr 1e-5 --eval-every 100 --resume
+  --steps 3000 --batch-size 1 --lr 1e-6 --eval-every 100 --resume
 ```
 
-Local content fingerprints prevent accidental resume with changed data or
-parent weights. Only the total step budget may change. After a crash, resume
+Local content fingerprints prevent accidental resume with changed data, parent
+weights, frozen teacher, or replay cache. Only the total step budget may change.
+Package 0.3.0 NR-only optimizer states are incompatible with this replay recipe;
+start a new run instead. After a crash, resume
 starts at the last completed validation checkpoint; later unsaved updates are
 repeated. Exact trajectory replay is tested on CPU on the same software stack;
 cross-device/CUDA bitwise reproducibility is not promised.
@@ -192,7 +253,12 @@ Adapted exports have their own format and metadata. They remain compatible with
 the current plotting, eager differentiation and optional frozen-inference API.
 Use this package version to load them; historical v0.2.1 rejects adapted weights.
 Original v0.2.1 weights still load unchanged. Further adaptation can start from
-an adapted export, using a fresh output directory and new optimizer.
+an adapted export, using a fresh output directory and new optimizer, but must
+also supply `--teacher-weights weights/weights.pt` pointing to the **original**
+release. Otherwise adapted weights are rejected as a replay teacher. If an
+optional retention bound is supplied and the starting student already exceeds
+it, the run refuses to start; explicitly assess that model and bound rather
+than hiding existing drift.
 
 ## Local-only data and smoke test
 
@@ -210,6 +276,7 @@ python package/examples/private_nr_smoke.py --weights weights/weights.pt \
   --output finetune_runs/synthetic_smoke
 ```
 
-It generates model-derived perturbed targets, performs a few CPU updates, and
-reloads the exported model. It is a software smoke test, not an NR accuracy or
-generalization benchmark.
+It generates model-derived perturbed targets, performs four full-network updates
+with the default 9:1 sample ratio (small eight-row retention panels), and reloads
+the exported model. CPU is the default; `--device cuda:0` exercises CUDA training.
+It is a software smoke test, not an NR accuracy or generalization benchmark.

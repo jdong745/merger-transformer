@@ -93,10 +93,12 @@ The native `[-1100,80]M` support includes guard intervals outside the usual repo
 
 ## License and scientific credit
 
-Package 0.3.0 additionally provides optional private-NR fine-tuning, documented
+Package 0.3.1 additionally provides optional private-NR fine-tuning, documented
 in [docs/FINETUNING.md](docs/FINETUNING.md). It starts from these published EMA
 weights with a new optimizer and uses fixed-reference strain targets prepared
-by the caller. It is not the historical multi-stage training pipeline. Adapted
+by the caller, plus frozen original-model replay. Full-network updates are the
+default; finite retention panels monitor drift without a default hard bound.
+They do not certify global retention or new NR accuracy. It is not the historical multi-stage training pipeline. Adapted
 weights carry separate metadata and retain the architecture and symmetry
 projection; the published accuracy numbers above apply only to the unchanged
 v0.2.1 weights. Fine-tuning can degrade other regions or analytic curvature and

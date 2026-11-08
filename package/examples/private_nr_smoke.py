@@ -37,12 +37,15 @@ def main():
     p = argparse.ArgumentParser(description=__doc__)
     p.add_argument("--weights", type=Path, required=True)
     p.add_argument("--output", type=Path, required=True, help="New scratch directory")
+    p.add_argument("--device", default="cpu")
     args = p.parse_args()
     args.output.mkdir(parents=True, exist_ok=False)
     manifest = prepare(args.weights, args.output / "synthetic_data")
     settings = parser().parse_args(["--weights", str(args.weights), "--manifest", str(manifest),
                                    "--output", str(args.output / "run"), "--steps", "4",
-                                   "--batch-size", "1", "--eval-every", "2", "--ema-decay", "0.5"])
+                                   "--batch-size", "1", "--eval-every", "2", "--ema-decay", "0.5",
+                                   "--replay-train-size", "8", "--replay-val-size", "8",
+                                   "--device", args.device])
     result = run(settings)
     adapted = WaveformModel.from_pretrained(args.output / "run" / "last_weights.pt")
     x = torch.tensor([2., .2, -.1, .3, -.05, .1, -.2], dtype=torch.float64, requires_grad=True)

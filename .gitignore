@@ -15,5 +15,6 @@ finetune_runs/
 best_weights.pt
 last_weights.pt
 state.pt
+replay.pt
 *.h5
 *.hdf5

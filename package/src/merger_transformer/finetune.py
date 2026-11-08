@@ -20,9 +20,10 @@ import torch
 from .api import WaveformModel, ADAPTED_WEIGHT_FORMAT
 from ._network import MODES, REFERENCE_CONTRACT
 from ._basis import QuinticBasis
+from ._replay import REPLAY_VERSION, build_panel, panel_tensors, panel_rows, retention_summary
 
 DATA_FORMAT = "merger-transformer-private-nr-v1"
-STATE_FORMAT = "merger-transformer-finetune-state-v1"
+STATE_FORMAT = "merger-transformer-finetune-state-v2"
 MF_REF = 0.01182117827433904
 
 
@@ -175,20 +176,27 @@ def export_weights(path, model, ema, parent, step, score, settings):
     # Parameter precision is not recovered by exporting to float64.
     state["basis.knots"] = QuinticBasis().knots
     metadata["adaptation"]["training_dtype"] = settings["dtype"]
+    metadata["adaptation"]["retention"] = {key: settings[key] for key in
+        ("replay_per_nr", "replay_weight", "replay_train_size", "replay_val_size", "max_replay_l2")}
+    metadata["adaptation"]["retention"]["teacher"] = "unchanged_v0.2.1_product"
     atomic_save({"format": ADAPTED_WEIGHT_FORMAT, "model_config": model.network.config_dict(),
                  "state_dict": state,
                  "metadata": metadata}, path)
 
 
 def run(args):
-    for name in ("steps", "batch_size", "eval_every", "threads", "patience"):
+    for name in ("steps", "batch_size", "eval_every", "threads", "patience", "replay_per_nr"):
         if getattr(args, name) < 1:
             raise ValueError(f"{name} must be positive")
-    for name in ("lr", "clip"):
+    for name in ("lr", "clip", "replay_weight"):
         if not math.isfinite(getattr(args, name)) or getattr(args, name) <= 0:
             raise ValueError(f"{name} must be finite and positive")
     if not 0 <= args.ema_decay < 1 or not math.isfinite(args.weight_decay) or args.weight_decay < 0:
         raise ValueError("Invalid EMA decay or weight decay")
+    if min(args.replay_train_size, args.replay_val_size) < 4:
+        raise ValueError("Replay panels need at least four inputs, one per q stratum")
+    if args.max_replay_l2 is not None and (not math.isfinite(args.max_replay_l2) or args.max_replay_l2 <= 0):
+        raise ValueError("Optional max_replay_l2 must be finite and positive")
     rows, fingerprint = load_dataset(args.manifest, args.window)
     if args.check_data:
         summary = {split: {"rows": sum(r.split == split for r in rows),
@@ -199,6 +207,11 @@ def run(args):
     torch.set_num_threads(args.threads)
     model = WaveformModel.from_pretrained(args.weights, device=args.device,
                                           dtype=getattr(torch, args.dtype), microbatch_size=1)
+    teacher_path = args.teacher_weights or args.weights
+    teacher = WaveformModel.from_pretrained(teacher_path, device=args.device, dtype=torch.float64,
+                                            microbatch_size=1)
+    if teacher.metadata.get("model") != "v7_width192_constant_low_lr":
+        raise ValueError("Replay teacher must be the unchanged published model. For an adapted student, supply --teacher-weights with the original weights.pt")
     # Train the same shared network; symmetry projection and spline basis stay intact.
     model.eval()
     for name, parameter in model.network.named_parameters():
@@ -213,15 +226,19 @@ def run(args):
         groups[row.group].append(row)
     group_names = sorted(groups)
     settings = {k: getattr(args, k) for k in ("trainable", "window", "dtype", "device", "threads",
-                 "batch_size", "lr", "weight_decay", "clip", "ema_decay", "seed", "eval_every", "patience")}
+                 "batch_size", "lr", "weight_decay", "clip", "ema_decay", "seed", "eval_every", "patience",
+                 "replay_per_nr", "replay_weight", "replay_train_size", "replay_val_size", "max_replay_l2")}
+    settings["replay_version"] = REPLAY_VERSION
     out = args.output
     initial_bytes = args.weights.read_bytes()
     parent_digest = hashlib.sha256(initial_bytes).hexdigest()
+    teacher_digest = hashlib.sha256(teacher_path.read_bytes()).hexdigest()
     step, best, best_step, bad = 0, float("inf"), 0, 0
     if args.resume:
         state = torch.load(out / "state.pt", map_location=model.device, weights_only=True)
         if (state.get("format") != STATE_FORMAT or state["settings"] != settings
-                or state["data_fingerprint"] != fingerprint or state["parent_fingerprint"] != parent_digest):
+                or state["data_fingerprint"] != fingerprint or state["parent_fingerprint"] != parent_digest
+                or state["teacher_fingerprint"] != teacher_digest):
             raise ValueError("Resume requires identical data, parent weights and settings; only --steps may increase")
         model.network.load_state_dict(state["raw"], strict=True)
         optimizer.load_state_dict(state["optimizer"])
@@ -233,11 +250,30 @@ def run(args):
     else:
         out.mkdir(parents=True, exist_ok=False)
     (out / "result.json").write_text(json.dumps({"status": "running", "resumed_from_step": step}) + "\n")
+    cache = out / "replay.pt"
+    if args.resume:
+        if hashlib.sha256(cache.read_bytes()).hexdigest() != state["replay_fingerprint"]:
+            raise ValueError("Resume replay cache has changed")
+        replay = torch.load(cache, map_location="cpu", weights_only=True)
+        replay_train, replay_val = panel_rows(replay["train"]), panel_rows(replay["validation"])
+    else:
+        print("Preparing frozen original-model replay targets (no NR truth used).", flush=True)
+        replay_train = build_panel(teacher, args.replay_train_size, args.seed + 104729, "train")
+        replay_val = build_panel(teacher, args.replay_val_size, args.seed + 130363, "validation")
+        atomic_save({"version": REPLAY_VERSION, "teacher_fingerprint": teacher_digest,
+                     "train": panel_tensors(replay_train), "validation": panel_tensors(replay_val)}, cache)
+    replay_digest = hashlib.sha256(cache.read_bytes()).hexdigest()
+    del teacher  # only immutable cached targets are used during optimization
 
-    def checkpoint(current, training_loss=None):
+    def checkpoint(current, training_loss=None, private_loss=None, replay_loss=None):
         nonlocal best, best_step, bad
         score, records = validate(model, validation, ema)
-        improved = score < best
+        retention, retention_records = validate(model, replay_val, ema)
+        retention_groups = retention_summary(retention_records)
+        eligible = args.max_replay_l2 is None or max(retention_groups.values()) <= args.max_replay_l2
+        if current == 0 and not eligible:
+            raise ValueError("Initial student already exceeds the original-model retention bound; use a compatible starting model or explicitly revise the bound")
+        improved = eligible and score < best
         if improved:
             best, best_step, bad = score, current, 0
             export_weights(out / "best_weights.pt", model, ema, model.metadata, current, score, settings)
@@ -245,6 +281,11 @@ def run(args):
             bad += 1
         export_weights(out / "last_weights.pt", model, ema, model.metadata, current, score, settings)
         record = {"step": current, "train_batch_loss": training_loss, "validation_fixed_group_L2": score,
+                  "train_private_loss": private_loss, "train_replay_loss": replay_loss,
+                  "retention_L2": retention, "retention_by_q": retention_groups,
+                  "retention_p95_L2": float(np.quantile([r["fixed_L2"] for r in retention_records], .95)),
+                  "retention_max_L2": max(r["fixed_L2"] for r in retention_records),
+                  "retention_eligible": eligible,
                   "best_step": best_step, "best_validation_fixed_group_L2": best,
                   "validation_rows": records}
         # Everything in this output directory is local and may contain private IDs.
@@ -253,6 +294,7 @@ def run(args):
         atomic_save({"format": STATE_FORMAT, "step": current, "raw": model.network.state_dict(),
                      "ema": ema, "optimizer": optimizer.state_dict(), "sampler": sampler.get_state(),
                      "settings": settings, "data_fingerprint": fingerprint, "parent_fingerprint": parent_digest,
+                     "teacher_fingerprint": teacher_digest, "replay_fingerprint": replay_digest,
                      "best": best, "best_step": best_step, "bad": bad}, out / "state.pt")
         print(json.dumps({k: v for k, v in record.items() if k != "validation_rows"}), flush=True)
 
@@ -262,6 +304,7 @@ def run(args):
     for step in range(step + 1, args.steps + 1):
         optimizer.zero_grad(set_to_none=True)
         total = 0.
+        private_total, replay_total = 0., 0.
         # Uniform physical groups, then uniform simulations within each group.
         # Per-row backward bounds activation memory even for irregular grids.
         for _ in range(args.batch_size):
@@ -272,6 +315,17 @@ def run(args):
             if not bool(torch.isfinite(loss)):
                 raise FloatingPointError("Nonfinite training loss; last saved state remains available")
             total += float(loss.detach())
+            private_total += float(loss.detach())
+            loss.backward()
+        replay_count = args.batch_size * args.replay_per_nr
+        for _ in range(replay_count):
+            row = replay_train[int(torch.randint(len(replay_train), (), generator=sampler))]
+            unweighted = row_loss(model, row) / replay_count
+            loss = args.replay_weight * unweighted
+            if not bool(torch.isfinite(loss)):
+                raise FloatingPointError("Nonfinite replay loss; last saved state remains available")
+            replay_total += float(unweighted.detach())
+            total += float(loss.detach())
             loss.backward()
         torch.nn.utils.clip_grad_norm_(parameters, args.clip, error_if_nonfinite=True)
         optimizer.step()
@@ -281,7 +335,7 @@ def run(args):
                     raise FloatingPointError("Nonfinite update; last saved state remains available")
                 ema[name].lerp_(value, 1 - args.ema_decay)
         if step % args.eval_every == 0 or step == args.steps:
-            checkpoint(step, total)
+            checkpoint(step, total, private_total, replay_total)
             if bad >= args.patience:
                 reason = "validation_patience"
                 break
@@ -289,6 +343,8 @@ def run(args):
               "best_step": best_step, "best_validation_fixed_group_L2": best,
               "trainable_parameters": sum(p.numel() for p in parameters),
               "exports": ["best_weights.pt", "last_weights.pt"], "alignment": "fixed_time_and_azimuth"}
+    result["retention"] = {"replay_per_nr": args.replay_per_nr, "weight": args.replay_weight,
+                           "max_stratum_L2": args.max_replay_l2, "teacher": "unchanged_v0.2.1_product"}
     (out / "result.json").write_text(json.dumps(result, indent=2) + "\n")
     return result
 
@@ -296,17 +352,24 @@ def run(args):
 def parser():
     p = argparse.ArgumentParser(description=__doc__)
     p.add_argument("--weights", type=Path, required=True)
+    p.add_argument("--teacher-weights", type=Path, help="Original released weights; defaults to --weights")
     p.add_argument("--manifest", type=Path, required=True)
     p.add_argument("--output", type=Path, default=Path("finetune_runs/private_nr"))
     p.add_argument("--device", default="cpu")
     p.add_argument("--dtype", choices=("float32", "float64"), default="float64")
-    p.add_argument("--trainable", choices=("head", "all"), default="head")
+    p.add_argument("--trainable", choices=("head", "all"), default="all")
     p.add_argument("--window", choices=("balanced", "merger"), default="balanced")
     p.add_argument("--steps", type=int, default=2000)
-    p.add_argument("--batch-size", type=int, default=4)
+    p.add_argument("--batch-size", type=int, default=1, help="Private NR rows per update; replay rows are additional")
+    p.add_argument("--replay-per-nr", type=int, default=9)
+    p.add_argument("--replay-weight", type=float, default=1.)
+    p.add_argument("--replay-train-size", type=int, default=512)
+    p.add_argument("--replay-val-size", type=int, default=128)
+    p.add_argument("--max-replay-l2", type=float, default=None,
+                   help="Optional maximum mean retention L2 in every q stratum for BEST eligibility; no hard bound by default")
     p.add_argument("--eval-every", type=int, default=100)
     p.add_argument("--patience", type=int, default=10, help="Validation checks without improvement")
-    p.add_argument("--lr", type=float, default=1e-5)
+    p.add_argument("--lr", type=float, default=1e-6)
     p.add_argument("--weight-decay", type=float, default=1e-4)
     p.add_argument("--clip", type=float, default=1.)
     p.add_argument("--ema-decay", type=float, default=.99)

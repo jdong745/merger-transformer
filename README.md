@@ -62,13 +62,13 @@ merger-transformer-finetune --weights weights/weights.pt \
   --device cuda --steps 2000
 ```
 
-The default updates only the output heads; `--trainable all` updates the full shared network. Both preserve the four symmetry branches and spline representation. The trainer saves resumable optimizer/EMA state and standalone `best_weights.pt` / `last_weights.pt` files, loadable by the usual inference and plotting interfaces. All data and outputs stay local.
+The default updates the **full shared network** at learning rate `1e-6`, with nine frozen original-model replay samples per private NR row. The private and replay mean losses are equally weighted. BEST is selected by private-NR validation error; independent retention panels report departure from the original model by q, with no default hard bound. Optional `--trainable head` updates only the output heads. Both preserve the four symmetry branches and spline representation. The trainer saves resumable optimizer/EMA state and standalone `best_weights.pt` / `last_weights.pt` files, loadable by the usual inference and plotting interfaces. All data and outputs stay local. Replay constrains forgetting; it does not guarantee retention everywhere or establish new NR accuracy.
 
 See the [fine-tuning guide](package/docs/FINETUNING.md) for the exact reference-frame, time-origin, memory and mode conventions, masked data format, validation, and resume commands. This is fixed-reference strain adaptation, not automatic preparation of raw NR or reproduction of the paper's full training procedure. The published v0.2.1 weights remain unchanged.
 
 ## Selected model
 
-The **v0.2.1 weights** contain the width-192 v7 Transformer with **1,974,036 parameters**, selected at update **48,000** using float64 EMA weights. Updates 40,000–48,000 used constant learning rate `1e-5`. Package **0.3.0** adds optional fine-tuning without replacing that model.
+The **v0.2.1 weights** contain the width-192 v7 Transformer with **1,974,036 parameters**, selected at update **48,000** using float64 EMA weights. Updates 40,000–48,000 used constant learning rate `1e-5`. Package **0.3.1** adds full-network private-NR adaptation with original-model replay without replacing that model.
 
 The original inference release passed 27 installed-package checks, source-versus-package parity, and CPU/CUDA frozen-compilation correctness controls. Additional fine-tuning checks exercise real updates, export, symmetry and exact CPU resume on synthetic targets. Compilation is optional and forward-only; use the eager path for input/time automatic differentiation and fine-tuning.
 
