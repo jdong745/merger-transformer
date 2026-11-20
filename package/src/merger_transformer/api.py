@@ -59,12 +59,12 @@ class WaveformModel(nn.Module):
         if not isinstance(metadata, dict):
             raise ValueError("Expected weights metadata")
         base = metadata if payload["format"] == WEIGHT_FORMAT else metadata.get("base_product", {})
-        if (not isinstance(base, dict) or base.get("model") != "v7_width192_constant_low_lr"
-                or base.get("selected_step") != 48000
-                or base.get("continuation_arm") != "constant"
-                or base.get("continuation_start_step") != 40000
-                or base.get("continuation_learning_rate") != 1e-5):
-            raise ValueError("This release requires v7 width192 constant low-LR STEP048000 EMA weights")
+        if (not isinstance(base, dict)
+                or base.get("model") != "extended_window_width224_bump512"
+                or base.get("selected_step") != 64000
+                or base.get("parameters") != 2564276
+                or base.get("knot_kind") != "density_bump_v1"):
+            raise ValueError("This release requires v0.5.0 extended-window width-224 STEP064000 EMA weights")
         if payload["format"] == ADAPTED_WEIGHT_FORMAT and (
             metadata.get("model") != "private_nr_finetune"
             or not isinstance(metadata.get("adaptation"), dict)
@@ -136,7 +136,7 @@ class WaveformModel(nn.Module):
         return t
 
     def coefficients(self, params: Any) -> torch.Tensor:
-        """Return complex [21,384] or [batch,21,384] spline coefficients."""
+        """Return complex [21,512] or [batch,21,512] spline coefficients."""
         if self.device.type == "mps":
             return self._complex_on_cpu(self.coefficients_ri(params))
         x, single = self._prepare_parameters(params)
@@ -152,7 +152,7 @@ class WaveformModel(nn.Module):
         return torch.complex(values[..., 0], values[..., 1])
 
     def coefficients_ri(self, params: Any) -> torch.Tensor:
-        """Device-resident real [...,21,384,2] (real, imaginary) coefficients."""
+        """Device-resident real [...,21,512,2] (real, imaginary) coefficients."""
         x, single = self._prepare_parameters(params)
         chunks = [self.network.coefficients_ri(piece) for piece in x.split(self.microbatch_size)]
         c = chunks[0] if len(chunks) == 1 else torch.cat(chunks, dim=0)
@@ -168,8 +168,9 @@ class WaveformModel(nn.Module):
             raise ValueError("derivative must be 0, 1 or 2")
         t = self._prepare_times(times)
         c = torch.as_tensor(coefficients)
-        if not c.is_floating_point() or c.ndim not in (3, 4) or c.shape[-3:] != (21, 384, 2):
-            raise ValueError("coefficients must be real [21,384,2] or [batch,21,384,2]")
+        nb = self.network.config.basis_size
+        if not c.is_floating_point() or c.ndim not in (3, 4) or c.shape[-3:] != (21, nb, 2):
+            raise ValueError(f"coefficients must be real [21,{nb},2] or [batch,21,{nb},2]")
         if c.ndim == 4 and c.shape[0] == 0:
             raise ValueError("Empty coefficient batches are not supported")
         c = c.to(device=self.device, dtype=self.dtype)
@@ -206,8 +207,9 @@ class WaveformModel(nn.Module):
             return self._complex_on_cpu(self.evaluate_coefficients_ri(pair, times, derivative=derivative))
         t = self._prepare_times(times)
         c = torch.as_tensor(coefficients, device=self.device)
-        if c.ndim not in (2, 3) or c.shape[-2:] != (21, 384) or not c.is_complex():
-            raise ValueError("coefficients must be complex with shape [21,384] or [batch,21,384]")
+        nb = self.network.config.basis_size
+        if c.ndim not in (2, 3) or c.shape[-2:] != (21, nb) or not c.is_complex():
+            raise ValueError(f"coefficients must be complex with shape [21,{nb}] or [batch,21,{nb}]")
         if c.ndim == 3 and c.shape[0] == 0:
             raise ValueError("Empty coefficient batches are not supported")
         complex_dtype = torch.complex128 if self.dtype == torch.float64 else torch.complex64

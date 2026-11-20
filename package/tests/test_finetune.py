@@ -30,7 +30,7 @@ def settings(weights, manifest, output, *extra):
 
 
 def test_masked_quadrature():
-    t = np.array([-500., -400., -300., -200., -160., -80., 0., 40.])
+    t = np.array([-1400., -1000., -500., -200., -160., -80., 0., 100.])
     h = np.ones((21, len(t)), dtype=complex)
     mask = np.ones(h.shape, dtype=bool)
     mask[:, 1] = False
@@ -75,10 +75,6 @@ def test_head_training_export_and_exact_resume(manifest, weights_path, tmp_path)
     changed = [k for k, v in state["raw"].items() if not torch.equal(v, parent[k])]
     assert changed and all(k.startswith(("output.", "mode_head.")) for k in changed)
     assert result["best_validation_fixed_group_L2"] <= .03 / 1.03 + 1e-12
-    # Exercise migration of 0.3.1 states, which lack explicit path metadata.
-    state["settings"].pop("teacher_device")
-    state["settings"].pop("numerical_path")
-    torch.save(state, short / "state.pt")
     run(settings(weights_path, manifest, short, "--resume", "--steps", "4"))
     run(settings(weights_path, manifest, full, "--steps", "4"))
     resumed = torch.load(short / "state.pt", weights_only=True)

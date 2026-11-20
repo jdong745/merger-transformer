@@ -41,8 +41,8 @@ def sample_inputs(count, seed):
 @torch.no_grad()
 def build_panel(teacher, count, seed, split):
     from .finetune import Row, loss_weights
-    # Full published scoring core, 1M spacing, all 21 modes, fixed frame/time.
-    times = np.arange(-1000., 41.)
+    # Full extended evaluation window [-1500, 100]M, 1M spacing, all 21 modes.
+    times = np.arange(-1500., 101.)
     rows = []
     for i, (stratum, x) in enumerate(sample_inputs(count, seed)):
         h = teacher(x, times).cpu().numpy().astype(np.complex128)

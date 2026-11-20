@@ -10,7 +10,7 @@ parser.add_argument("--output", default="waveform.pt")
 args = parser.parse_args()
 model = WaveformModel.from_pretrained(args.weights, device=args.device)
 x = torch.tensor([2., .2, -.1, .3, -.05, .1, -.2], dtype=torch.float64, device=args.device)
-t = torch.linspace(-1100., 80., 2361, dtype=torch.float64, device=args.device)
+t = torch.linspace(-1500., 100., 3201, dtype=torch.float64, device=args.device)
 with torch.no_grad():
     h, psi4 = model.waveforms(x, t)
 torch.save({"parameters": x.cpu(), "time_M": t.cpu(), "mode_order": MODES,

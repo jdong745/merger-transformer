@@ -50,7 +50,7 @@ def main():
                           [1000., 0., 0., .8, 0., 0., 0.]], dtype=torch.float64)
         # Identical representable inputs/times for all precision comparisons.
         x = x.float().double()
-        times = torch.cat((torch.linspace(-1100,80,237,dtype=torch.float64), ref.network.basis.knots[50:380:20]))
+        times = torch.cat((torch.linspace(-1620,160,357,dtype=torch.float64), ref.network.basis.knots[50:500:25]))
         times = times.float().double()
         report['comparisons'] = {}
         with torch.no_grad():

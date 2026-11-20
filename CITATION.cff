@@ -5,7 +5,7 @@ type: software
 authors:
   - family-names: Dong
     given-names: Jameson
-version: 0.2.1
+version: 0.5.0
 license: MIT
 repository-code: "https://github.com/jdong745/merger-transformer"
 preferred-citation:
@@ -13,5 +13,5 @@ preferred-citation:
   authors:
     - family-names: Dong
       given-names: Jameson
-  title: "A Transformer model for precessing binary black-hole merger waveforms calibrated to numerical relativity"
+  title: "A high-precision Transformer model for precessing binary black-hole merger waveforms calibrated to numerical relativity"
   year: 2026

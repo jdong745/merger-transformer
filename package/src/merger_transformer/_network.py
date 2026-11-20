@@ -1,11 +1,11 @@
-"""Self-contained numerical core of the selected strain-only v7 model.
+"""Self-contained numerical core of the extended-window width-224 Merger Transformer.
 
 All 21 signed ell=2..4 modes are retained. One shared coefficient Transformer
 is evaluated on the four exchange/reflection inputs, projected back with the
 fixed group action, and multiplied by the recorded symmetric-mass-ratio factor.
 There is no phase canonicalization, target input, baseline, or output filtering.
-Only the production architecture is supported; its parameter names match the
-selected checkpoint's EMA exactly.
+Only the extended-window architecture is supported; its parameter names match
+the selected STEP064000 EMA checkpoint.
 """
 from __future__ import annotations
 
@@ -32,23 +32,23 @@ _SEED_SALT = 0x6d6f64655f636f75
 
 @dataclass(frozen=True)
 class ModelConfig:
-    """The complete model_config recorded by the selected product checkpoint."""
+    """The complete model_config recorded by the selected STEP064000 product."""
 
     architecture: str = "transformer"
     representation: str = "direct"
-    basis_size: int = 384
-    time_min: float = -1100.0
-    time_max: float = 80.0
+    basis_size: int = 512
+    time_min: float = -1620.0
+    time_max: float = 160.0
     amplitude_scale: float = 0.3
     mlp_width: int = 128
     mlp_depth: int = 4
-    transformer_width: int = 192
+    transformer_width: int = 224
     transformer_depth: int = 3
     memory_tokens: int = 8
     attention_heads: int = 4
     conditioner_width: int = 256
     conditioner_depth: int = 3
-    knot_kind: str = "density"
+    knot_kind: str = "density_bump_v1"
     density_ratio: float = 4.0
     density_center: float = -200.0
     density_width: float = 40.0
@@ -57,6 +57,8 @@ class ModelConfig:
     reference_contract: str = REFERENCE_CONTRACT
     mode_width: int = 32
     nu0: float = DEFAULT_NU0
+    density_right_center: float = 75.0
+    density_right_width: float = 15.0
 
 
 def coordinates(params: torch.Tensor) -> torch.Tensor:
@@ -267,7 +269,7 @@ class Generator(nn.Module):
         if isinstance(config, dict):
             config = ModelConfig(**config)
         if not isinstance(config, ModelConfig) or config != ModelConfig():
-            raise ValueError("Only the recorded selected v7 configuration is supported")
+            raise ValueError("Only the recorded extended-window width-224 bump-512 configuration is supported")
         self.config = config
         self.basis = QuinticBasis()
         layers, incoming = [], 7
@@ -317,7 +319,7 @@ class Generator(nn.Module):
         return torch.complex(out[..., 0], out[..., 1]).transpose(1, 2) * c.amplitude_scale
 
     def coefficients_ri(self, params: torch.Tensor) -> torch.Tensor:
-        """Real [B,21,384,2] coefficients; no complex operations on device."""
+        """Real [B,21,512,2] coefficients; no complex operations on device."""
         if params.shape[0] == 0:
             raise ValueError("Empty batches are not supported")
         orbit = input_orbit(params, self.config.symmetry)

@@ -35,7 +35,7 @@ def main():
     params = config['parameters']
     if len(params) != 7 or any(isinstance(v, (list,dict)) for v in params):
         parser.error('parameters must be one seven-vector')
-    lo, hi, dt = (float(config.get(k,v)) for k,v in [('time_min_M',-1100),('time_max_M',80),('dt_M',.5)])
+    lo, hi, dt = (float(config.get(k,v)) for k,v in [('time_min_M',-1500),('time_max_M',100),('dt_M',.5)])
     if not all(math.isfinite(v) for v in (lo,hi,dt)) or hi <= lo or dt <= 0:
         parser.error('Require finite time_min_M < time_max_M and dt_M > 0')
     intervals = round((hi-lo)/dt)
@@ -77,7 +77,7 @@ def main():
     if model.metadata.get('model') == 'private_nr_finetune':
         label = 'Private-NR adaptation, EMA update ' + str(model.metadata['adaptation']['steps'])
     else:
-        label = 'v7 constant low-LR STEP048000 EMA'
+        label = 'Merger Transformer v0.5.0 (STEP064000 EMA)'
     fig.suptitle(label + ' — observer projection, no alignment')
     for ext in ('png','pdf'): fig.savefig(str(output)+'_polarizations.'+ext,dpi=160)
     plt.close(fig)

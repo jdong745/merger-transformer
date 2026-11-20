@@ -16,7 +16,7 @@ def test_export_and_random_stream(weights_path):
     before = torch.get_rng_state().clone()
     net = WaveformModel.from_pretrained(weights_path)
     assert torch.equal(before, torch.get_rng_state())
-    assert sum(p.numel() for p in net.parameters()) == 1974036
+    assert sum(p.numel() for p in net.parameters()) == 2564276
     assert not any(p.requires_grad for p in net.parameters())
 
 
@@ -24,7 +24,7 @@ def test_spline_against_scipy(model, parameters):
     with torch.no_grad():
         coefficients = model.coefficients(parameters)
     knots = model.network.basis.knots.cpu().numpy()
-    times = np.unique(np.r_[np.linspace(-1100, 80, 311), knots])
+    times = np.unique(np.r_[np.linspace(-1620, 160, 401), knots])
     independent = BSpline(knots, coefficients.cpu().numpy(), 5, axis=-1, extrapolate=False)
     for derivative in (0, 1, 2):
         actual = model.evaluate_coefficients(coefficients, times, derivative=derivative).cpu().numpy()
@@ -32,7 +32,7 @@ def test_spline_against_scipy(model, parameters):
 
 
 def test_time_autograd_matches_curvature(model, parameters):
-    times = torch.tensor([-1100., -305.25, -20.25, 0., 80.], dtype=torch.float64, requires_grad=True)
+    times = torch.tensor([-1620., -1000., -305.25, -20.25, 0., 100., 160.], dtype=torch.float64, requires_grad=True)
     with torch.no_grad():
         c = model.coefficients(parameters)
     h = model.evaluate_coefficients(c, times)
@@ -85,7 +85,7 @@ def test_exchange_reflection_and_aligned_odd_modes(model, parameters):
 
 
 def test_shapes_dictionary_and_microbatches(model, parameters, weights_path):
-    times = torch.tensor([-1000., -160., -20.25, 40.], dtype=torch.float64)
+    times = torch.tensor([-1500., -160., -20.25, 100.], dtype=torch.float64)
     other = parameters.clone()
     other[0] = 8.
     inputs = torch.stack((parameters, other))
@@ -113,7 +113,7 @@ def test_parameter_guards(model, bad):
         model(bad, [0.])
 
 
-@pytest.mark.parametrize("bad", [[], [[0.]], [-1100.0001], [80.0001], [float("nan")]])
+@pytest.mark.parametrize("bad", [[], [[0.]], [-1620.0001], [160.0001], [float("nan")]])
 def test_time_guards(model, parameters, bad):
     with pytest.raises(ValueError):
         model(parameters, bad)
@@ -135,7 +135,7 @@ def test_reference_frame_smooth_gradient_at_equal_mass(model):
 def test_single_precision_optional(weights_path, parameters):
     model = WaveformModel.from_pretrained(weights_path, dtype=torch.float32)
     with torch.no_grad():
-        h, p = model.waveforms(parameters.float(), [0., 40.])
+        h, p = model.waveforms(parameters.float(), [0., 100.])
     assert h.dtype == torch.complex64 and p.dtype == torch.complex64
     assert torch.isfinite(h).all() and torch.isfinite(p).all()
 
@@ -154,7 +154,7 @@ def test_python_lists_preserve_double_precision(model):
 
 def test_rejects_other_checkpoint_identity(weights_path, tmp_path):
     payload = torch.load(weights_path, weights_only=True, map_location="cpu")
-    payload["metadata"]["selected_step"] = 40000
+    payload["metadata"]["selected_step"] = 48000
     wrong = tmp_path / "wrong_identity.pt"
     torch.save(payload, wrong)
     with pytest.raises(ValueError):
@@ -170,11 +170,11 @@ def test_rejects_inconsistent_knots(weights_path, tmp_path):
         WaveformModel.from_pretrained(wrong)
 
 
-@pytest.mark.parametrize("field,value", [("model", "v7_width192_recovery"), ("continuation_arm", "decay"), ("continuation_learning_rate", 1e-3)])
-def test_rejects_wrong_continuation(weights_path, tmp_path, field, value):
+@pytest.mark.parametrize("field,value", [("model", "v7_width192_constant_low_lr"), ("knot_kind", "density"), ("parameters", 1974036)])
+def test_rejects_wrong_architecture_identity(weights_path, tmp_path, field, value):
     payload = torch.load(weights_path, weights_only=True, map_location="cpu")
     payload["metadata"][field] = value
-    wrong = tmp_path / "wrong_continuation.pt"
+    wrong = tmp_path / "wrong_arch.pt"
     torch.save(payload, wrong)
     with pytest.raises(ValueError):
         WaveformModel.from_pretrained(wrong)

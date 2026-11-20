@@ -14,7 +14,7 @@ def prepare(weights, directory):
     directory.mkdir(parents=True, exist_ok=False)
     torch.set_num_threads(1)
     model = WaveformModel.from_pretrained(weights)
-    times = np.array([-800., -600., -400., -200., -160., -120., -80., -40., 0., 40.])
+    times = np.array([-1400., -1000., -600., -200., -160., -120., -80., -40., 0., 40., 100.])
     rows = []
     for i, q in enumerate((1.5, 2., 2.5)):
         params = np.array([q, .2, -.1, .3, -.05, .1, -.2])

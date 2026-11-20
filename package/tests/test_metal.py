@@ -18,7 +18,7 @@ def test_real_channel_waveforms_and_projection(weights_path, dtype):
                       [1., 0., 0., .3, 0., 0., .3],
                       [8., .7, .1, .1, 0., .1, 0.],
                       [1000., 0., 0., .8, 0., 0., 0.]], dtype=dtype)
-    t = torch.linspace(-1100, 80, 237, dtype=dtype)
+    t = torch.linspace(-1620, 160, 357, dtype=dtype)
     tol = 2e-6 if dtype == torch.float32 else 2e-14
     with torch.no_grad():
         c = model.coefficients(x)
@@ -39,7 +39,7 @@ def test_real_channel_gradient_and_update(weights_path):
     model = WaveformModel.from_pretrained(weights_path, dtype=torch.float32)
     model.network.requires_grad_(True).train()
     x = torch.tensor([2., .2, -.1, .3, -.05, .1, -.2], requires_grad=True)
-    t = torch.tensor([-900., -500., -200., -160., -80., 0., 40.], requires_grad=True)
+    t = torch.tensor([-1400., -900., -500., -200., -160., -80., 0., 100.], requires_grad=True)
     # Exercise the functional attention path used on MPS, on CPU as an arithmetic control.
     import merger_transformer._network as network
     from functools import partial
@@ -99,7 +99,7 @@ def test_actual_mps_forward_and_backward(weights_path):
     m = WaveformModel.from_pretrained(weights_path, device='mps', microbatch_size=1)
     cpu = WaveformModel.from_pretrained(weights_path)
     x = torch.tensor([2., .2, -.1, .3, -.05, .1, -.2], device='mps', requires_grad=True)
-    t = torch.linspace(-1000, 40, 105, device='mps', requires_grad=True)
+    t = torch.linspace(-1500, 100, 161, device='mps', requires_grad=True)
     h, p = m.waveforms_ri(x, t)
     assert h.device.type == p.device.type == 'mps'
     hc, pc = cpu.waveforms(x.detach().cpu().double(), t.detach().cpu().double())

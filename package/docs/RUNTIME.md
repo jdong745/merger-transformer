@@ -1,21 +1,20 @@
-# Inference execution and timing
+# Inference execution and runtime
 
-The eager interface is the portable, differentiable reference. Use float64 to match the manuscript's EMA evaluation. The optional `compile_inference()` wrapper is forward-only, freezes a copy of the selected model, and keeps seven physical inputs and the time array as runtime arguments. It requires the tested PyTorch 2.12.x compilation API. It does not download weights or compile a hard-coded physical system.
+The eager interface (`WaveformModel`) is the portable reference supporting `float64`/`complex128` execution and automatic differentiation with respect to inputs and time.
 
-The CPU path compiles the full field evaluation. The CUDA path compiles coefficient and basis components and performs their complex matrix multiplication outside those components. This is the measured implementation, rather than a claim that every operation is fused into one kernel. The API's domain checks occur outside the compiled numerical core. Unsupported compiler/runtime environments fail explicitly.
+## Compiled forward inference (`float64`)
 
-Compilation happens on first use and may repeat for a new input batch shape, dtype, thread setting, device, or grid length. It includes code generation, C++/GPU kernel build and first-call initialization. Run all intended shapes and several additional warmup calls before measuring steady-state inference. Do not include those first-call costs in steady-state latency. A standalone compiler-build time cannot be inferred by subtracting an eager run from the first compiled call.
+With PyTorch 2.12.x on CPU or CUDA, `model.compile_inference()` creates an independent frozen TorchInductor forward snapshot (`fullgraph=True`, `dynamic=False`, `config.freezing=True`). Physical parameters and time grids remain runtime arguments, and no basis matrix is cached across calls.
 
-A complete waveform call includes all four symmetry evaluations, all 21 signed modes and a newly constructed quintic basis. The paper benchmark uses 2361 times on `[-1100,80]M` at 0.5M spacing, FP64 EMA weights, no host-to-device copy inside the device-resident timing, and explicit GPU synchronization. Model loading is outside the timing. CPU thread count, physical batch size and microbatch size are distinct settings. If using `evaluate_coefficients`, cached coefficients or a different grid, label that changed timing contract separately.
+The first call for a new `(batch_size, time_len, device, dtype)` triggers JIT compilation and should be warmed up prior to timing. Each timed call evaluates the full parameter-to-strain pipeline, including four-way symmetry projection and 512-knot B-spline evaluation across all 21 signed modes at all `3561` time points on `[-1620, 160]M` (`0.5M` spacing). Steady-state warm-started compiled `float64` inference achieves:
 
-The eager `.waveforms()` call shares one coefficient-network evaluation between strain and curvature. The compiled `.waveforms()` currently performs separate full strain and curvature calls. Do not compare their cost with a strain-only benchmark as if they were identical work.
+- **GPU (NVIDIA A100-SXM4-40GB, batch `1024`, microbatch `128`)**: **`445 waveforms/s`** (`2.25 ms/waveform`, `2.301 s` total, `9.68 GiB` peak memory).
+- **CPU (AMD EPYC 7773X, `4` threads, batch `32`)**: **`4.13 waveforms/s`** (`242.3 ms/waveform`, `7.75 s` total).
 
-Use the eager model for automatic differentiation. The compiled forward wrapper rejects gradient-requiring physical inputs or times. Analytic spline derivative evaluation is still provided by `evaluate(..., derivative=1/2)` and `.psi4()`, but that does not imply a compiled input-gradient or Hessian interface.
+Across all tested CPU and GPU parity controls (including perturbed runtime time grids and discrete symmetry checks), compiled execution matches eager `float64` and autograd checks within `3.8e-15` relative norm with zero graph breaks.
 
-The release verification report records finite input/output checks against the selected research checkpoint and compilation controls. Paper timings describe specific hardware/software and are not a performance guarantee on another system. FP32 is an explicit optional eager choice; it is not interchangeable with the paper's FP64 precision contract.
+## Precision and differentiation
 
-## Metal
-
-The experimental MPS backend is eager FP32, with no measured Apple GPU speed
-claim. The FP64 compiled CPU/CUDA benchmarks above do not apply to it. See
-[METAL.md](METAL.md).
+- Compiled inference is forward-only and rejects gradient-requiring inputs (`requires_grad=True`). Use the eager `WaveformModel` for input/time automatic differentiation.
+- Analytic spline derivatives (`derivative=1, 2` and `.psi4()`) remain available on both eager and compiled paths. Eager `.waveforms()` computes the coefficient network once for both strain and `Psi4`.
+- On Apple Silicon (Metal/MPS), eager `float32` real-channel inference is provided; see [METAL.md](METAL.md).

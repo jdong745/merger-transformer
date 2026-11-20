@@ -23,7 +23,7 @@ from ._basis import QuinticBasis
 from ._replay import REPLAY_VERSION, build_panel, panel_tensors, panel_rows, retention_summary
 
 DATA_FORMAT = "merger-transformer-private-nr-v1"
-STATE_FORMAT = "merger-transformer-finetune-state-v2"
+STATE_FORMAT = "merger-transformer-finetune-state-v3"
 MF_REF = 0.01182117827433904
 
 
@@ -42,10 +42,10 @@ def loss_weights(times, strain, mask, window="balanced"):
     """Trapezoidal quadrature, independently normalized in each active window.
 
     No integration across gaps in a mode's mask. Equal-weight normalized early
-    [-1000,-160) and merger [-160,40] errors, or merger only. Unknown modes do
+    [-1500,-160) and merger [-160,100] errors, or merger only. Unknown modes do
     not contribute to either the numerator or the target-energy denominator.
     """
-    pieces = [(-160., 40.)] if window == "merger" else [(-1000., -160.), (-160., 40.)]
+    pieces = [(-160., 100.)] if window == "merger" else [(-1500., -160.), (-160., 100.)]
     weights = np.zeros(strain.shape, dtype=np.float64)
     for index, (lo, hi) in enumerate(pieces):
         inside = (times >= lo) & ((times < hi) if hi == -160 else (times <= hi))
@@ -109,8 +109,8 @@ def load_dataset(path: Path, window="balanced"):
             raise ValueError(f"{sid}: spin magnitude exceeds one")
         if t.ndim != 1 or len(t) < 3 or not np.isrealobj(t) or not np.isfinite(t).all():
             raise ValueError(f"{sid}: invalid time array")
-        if np.any(np.diff(t) <= 0) or t[0] < -1100 or t[-1] > 80:
-            raise ValueError(f"{sid}: times must increase within [-1100,80]M")
+        if np.any(np.diff(t) <= 0) or t[0] < -1620 or t[-1] > 160:
+            raise ValueError(f"{sid}: times must increase within [-1620,160]M")
         if not np.array_equal(modes, np.asarray(MODES)):
             raise ValueError(f"{sid}: use the complete ordered 21 signed MODES axis")
         if h.shape != (21, len(t)) or not np.iscomplexobj(h):
@@ -190,7 +190,7 @@ def export_weights(path, model, ema, parent, step, score, settings):
     metadata["adaptation"]["numerical_path"] = settings["numerical_path"]
     metadata["adaptation"]["retention"] = {key: settings[key] for key in
         ("replay_per_nr", "replay_weight", "replay_train_size", "replay_val_size", "max_replay_l2")}
-    metadata["adaptation"]["retention"]["teacher"] = "unchanged_v0.2.1_product"
+    metadata["adaptation"]["retention"]["teacher"] = "unchanged_v0.5.0_product"
     atomic_save({"format": ADAPTED_WEIGHT_FORMAT, "model_config": model.network.config_dict(),
                  "state_dict": state,
                  "metadata": metadata}, path)
@@ -225,7 +225,7 @@ def run(args):
     teacher_device = "cpu" if model.device.type == "mps" else args.device
     teacher = WaveformModel.from_pretrained(teacher_path, device=teacher_device, dtype=torch.float64,
                                             microbatch_size=1)
-    if teacher.metadata.get("model") != "v7_width192_constant_low_lr":
+    if teacher.metadata.get("model") != "extended_window_width224_bump512":
         raise ValueError("Replay teacher must be the unchanged published model. For an adapted student, supply --teacher-weights with the original weights.pt")
     # Train the same shared network; symmetry projection and spline basis stay intact.
     model.eval()
@@ -255,10 +255,7 @@ def run(args):
     if args.resume:
         state = torch.load(out / "state.pt", map_location="cpu" if model.device.type == "mps" else model.device,
                            weights_only=True)
-        # 0.3.1 CPU/CUDA states predate explicit numerical-path metadata.
         saved_settings = dict(state["settings"])
-        saved_settings.setdefault("teacher_device", saved_settings["device"])
-        saved_settings.setdefault("numerical_path", "complex_v1")
         if (state.get("format") != STATE_FORMAT or saved_settings != settings
                 or state["data_fingerprint"] != fingerprint or state["parent_fingerprint"] != parent_digest
                 or state["teacher_fingerprint"] != teacher_digest):
@@ -368,7 +365,7 @@ def run(args):
               "trainable_parameters": sum(p.numel() for p in parameters),
               "exports": ["best_weights.pt", "last_weights.pt"], "alignment": "fixed_time_and_azimuth"}
     result["retention"] = {"replay_per_nr": args.replay_per_nr, "weight": args.replay_weight,
-                           "max_stratum_L2": args.max_replay_l2, "teacher": "unchanged_v0.2.1_product"}
+                           "max_stratum_L2": args.max_replay_l2, "teacher": "unchanged_v0.5.0_product"}
     (out / "result.json").write_text(json.dumps(result, indent=2) + "\n")
     return result
 
